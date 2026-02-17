@@ -1,0 +1,4 @@
+.terraform/
+*.zip
+build/
+# Keep .terraform.lock.hcl committed for consistent provider versions

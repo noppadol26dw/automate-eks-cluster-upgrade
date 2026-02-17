@@ -1,0 +1,12 @@
+notification_email = "your-email@example.com"
+enable_auto_upgrade = false
+aws_region          = "us-east-1"
+name_prefix         = "" # e.g. "dev-" for multiple environments
+
+# EventBridge Scheduler: cron(0 17 ? * FRI *) = Fridays 17:00 UTC
+schedule_expression_version_checker = "cron(0 17 ? * FRI *)"
+schedule_expression_nodegroup       = "cron(0 18 ? * FRI *)"
+
+# Clusters to process: include if cluster NAME or tag Environment/Env contains any of these (case-insensitive, comma-separated).
+# Examples: "dev" -> name has "dev" or tag has "dev"; "dev,lms" -> name or tag has "dev" or "lms". Use "" for all clusters.
+target_environments = "dev,development"
