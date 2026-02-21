@@ -2,6 +2,16 @@
 
 Two Lambda functions (EKS version checker and node group version checker), SNS notifications, and EventBridge Scheduler. Only clusters that match `target_environments` (by name or tag `Environment`/`Env`) are processed.
 
+## Features
+
+- **Automated EKS version checking** - Monitors cluster versions and checks upgrade readiness
+- **Parallel addon updates** - Updates multiple addons simultaneously (configurable concurrency)
+- **CloudWatch monitoring** - Alarms for Lambda errors and throttles
+- **Dry-run mode** - Test without making actual changes
+- **Authentication preservation** - Maintains IRSA and Pod Identity during addon updates
+- **Input validation** - Validates email format and schedule expressions
+- **Batching support** - Configurable max addons per execution for large clusters
+
 ## What the two functions do
 
 **1. EKS version checker** (first schedule, e.g. Fridays 17:00 UTC)
@@ -10,7 +20,8 @@ Two Lambda functions (EKS version checker and node group version checker), SNS n
 - For each cluster: compares control plane version to the next allowed EKS version; checks upgrade readiness insights.
 - If upgrade is possible and **`enable_auto_upgrade` is true**: calls `UpdateClusterVersion` (one minor version at a time) and sends SNS.
 - If **`enable_auto_upgrade` is false**: only sends SNS (up to date / upgrade available / upgrade blocked).
-- Then, for that cluster’s addons (vpc-cni, kube-proxy, coredns, etc.): checks for newer addon versions, preserves Pod Identity/IRSA, and updates addons when a newer version exists. Sends one SNS summary per cluster for addons.
+- Then, for that cluster's addons (vpc-cni, kube-proxy, coredns, etc.): checks for newer addon versions, preserves Pod Identity/IRSA, and updates addons when a newer version exists. Uses **parallel processing** to update multiple addons simultaneously (configurable via `max_parallel_addons`). Processes up to `max_addons_per_run` per execution. Sends one SNS summary per cluster for addons.
+- **Dry-run mode** (optional): Simulates updates without making actual changes for testing.
 
 **2. Node group version checker** (second schedule, e.g. Fridays 18:00 UTC, 1 hour after the first)
 
@@ -29,6 +40,17 @@ You receive SNS emails for:
 - **Cluster version**: up to date, upgrade available, upgrade blocked (insights), or upgrade initiated.
 - **Addon summary** (one per cluster): total addons, counts for up-to-date / updated / failed, then a list of each updated addon with version change (e.g. `v1.12.4-eksbuild.1` -> `v1.13.2-eksbuild.1`) and authentication (IRSA, Pod Identity, or None).
 - **Node group summary** (one per cluster): up-to-date, updating (with update ID), or failed (with manual `--force` command when PDB blocks the update).
+
+## CloudWatch Alarms
+
+The solution creates CloudWatch alarms for monitoring Lambda health:
+
+- **EKS version checker errors** - Triggers when Lambda encounters errors
+- **EKS version checker throttles** - Triggers when Lambda is throttled
+- **Node group checker errors** - Triggers when Lambda encounters errors
+- **Node group checker throttles** - Triggers when Lambda is throttled
+
+All alarms trigger after 1 occurrence over a 5-minute period.
 
 ## Layout
 
@@ -65,6 +87,56 @@ Run Terraform from the **project root**. Module sources point at `./terraform/mo
 | `schedule_expression_version_checker` | No | `cron(0 17 ? * FRI *)` | EventBridge schedule for version checker (Fridays 17:00 UTC) |
 | `schedule_expression_nodegroup` | No | `cron(0 18 ? * FRI *)` | EventBridge schedule for node group version checker (Fridays 18:00 UTC) |
 | `target_environments` | No | `dev,development` | Comma-separated: only clusters whose name or tag `Environment`/`Env` contains one of these (case-insensitive). Use `""` to process all clusters. |
+| `max_parallel_addons` | No | `3` | Maximum number of addons to update in parallel. Recommended: 3-5 for production, 5-10 for development. |
+| `max_addons_per_run` | No | `30` | Maximum number of addons to process per Lambda execution. Remaining addons will be processed in the next scheduled run. |
+| `dry_run` | No | `false` | Enable dry-run mode to simulate updates without making changes. Useful for testing without a cluster. |
+
+## Performance Considerations
+
+### For Small Clusters (5-15 addons)
+- Use default settings: `max_parallel_addons = 3`
+- Sequential or low concurrency is sufficient
+- Lambda timeout: 300s is more than enough
+
+### For Medium Clusters (15-30 addons)
+- Recommended: `max_parallel_addons = 3-5`
+- Parallel processing provides 3x speed improvement
+- Processes all addons within Lambda timeout
+
+### For Large Clusters (30+ addons)
+- Recommended: `max_parallel_addons = 5-10`
+- Configure `max_addons_per_run` to limit per execution
+- Example: `max_addons_per_run = 30` with 50 addons = 2 scheduled runs
+- Remaining addons processed in next scheduled run
+
+### Performance Example
+
+With 30 addons and default settings:
+- **Sequential (old)**: 30 × 4s = 120s minimum (would timeout)
+- **Parallel 3 workers**: 30 ÷ 3 = 10 batches × 5s = ~50s ✅
+- **Parallel 5 workers**: 30 ÷ 5 = 6 batches × 5s = ~30s ✅
+
+## Testing
+
+### Dry-Run Mode (Recommended for testing)
+Enable dry-run to simulate operations without making changes:
+
+```hcl
+dry_run = true
+```
+
+This will:
+- List clusters and addons
+- Check for available updates
+- Log what **would** be updated
+- NOT call actual update APIs
+- Still send SNS notifications (marked as dry-run)
+
+### Without a Cluster
+If you don't have a cluster to test:
+1. Use `dry_run = true` - Safest option, just enable and run
+2. Create a minimal test cluster - Use AWS Free Tier (~$0.30/hour)
+3. Read-only mode - Set `enable_auto_upgrade = false` to only check, not update
 
 ## Apply
 
@@ -91,3 +163,19 @@ terraform init
 ```
 
 To override without editing the file: `terraform init -backend-config="bucket=OTHER-BUCKET" -backend-config="region=eu-west-1"`. To migrate from local state, use `-migrate-state` when prompted.
+
+## Outputs
+
+After applying Terraform, you'll get outputs for:
+
+- **Lambda functions**: ARNs and names for both checkers
+- **SNS topic**: ARN and name for notifications
+- **Schedules**: Names and expressions for both EventBridge schedules
+- **IAM roles**: ARNs for all Lambda and scheduler roles
+- **CloudWatch alarms**: ARNs for all four Lambda monitoring alarms
+
+Use these outputs for:
+- Integrating with other tools (e.g., dashboards, alerting systems)
+- Debugging issues
+- Configuring additional monitoring
+- Manual Lambda invocation for testing
