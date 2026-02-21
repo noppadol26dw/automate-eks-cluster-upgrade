@@ -19,9 +19,9 @@ resource "aws_lambda_function" "eks_version_checker" {
 
   environment {
     variables = {
-      SNS_TOPIC_ARN        = var.sns_topic_arn
-      ENABLE_AUTO_UPGRADE  = var.enable_auto_upgrade ? "true" : "false"
-      TARGET_ENVIRONMENTS  = var.target_environments
+      SNS_TOPIC_ARN       = var.sns_topic_arn
+      ENABLE_AUTO_UPGRADE = var.enable_auto_upgrade ? "true" : "false"
+      TARGET_ENVIRONMENTS = var.target_environments
     }
   }
 }
@@ -43,9 +43,77 @@ resource "aws_lambda_function" "nodegroup_version_checker" {
 
   environment {
     variables = {
-      SNS_TOPIC_ARN        = var.sns_topic_arn
-      ENABLE_AUTO_UPGRADE  = var.enable_auto_upgrade ? "true" : "false"
-      TARGET_ENVIRONMENTS  = var.target_environments
+      SNS_TOPIC_ARN       = var.sns_topic_arn
+      ENABLE_AUTO_UPGRADE = var.enable_auto_upgrade ? "true" : "false"
+      TARGET_ENVIRONMENTS = var.target_environments
     }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "eks_version_checker_errors" {
+  alarm_name          = "${local.prefix}eks-version-checker-errors"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "1"
+  alarm_description   = "Alarm for EKS version checker Lambda errors"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.eks_version_checker.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "eks_version_checker_throttles" {
+  alarm_name          = "${local.prefix}eks-version-checker-throttles"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "Throttles"
+  namespace           = "AWS/Lambda"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "1"
+  alarm_description   = "Alarm for EKS version checker Lambda throttles"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.eks_version_checker.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "nodegroup_version_checker_errors" {
+  alarm_name          = "${local.prefix}eks-nodegroup-version-checker-errors"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "1"
+  alarm_description   = "Alarm for node group version checker Lambda errors"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.nodegroup_version_checker.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "nodegroup_version_checker_throttles" {
+  alarm_name          = "${local.prefix}eks-nodegroup-version-checker-throttles"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "Throttles"
+  namespace           = "AWS/Lambda"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "1"
+  alarm_description   = "Alarm for node group version checker Lambda throttles"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.nodegroup_version_checker.function_name
   }
 }

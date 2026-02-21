@@ -29,13 +29,13 @@ module "lambda" {
 module "scheduler" {
   source = "./terraform/modules/scheduler"
 
-  name_prefix                         = local.prefix
-  schedule_expression_version_checker = var.schedule_expression_version_checker
-  schedule_expression_nodegroup       = var.schedule_expression_nodegroup
-  eks_version_checker_lambda_arn      = module.lambda.eks_version_checker_arn
+  name_prefix                          = local.prefix
+  schedule_expression_version_checker  = var.schedule_expression_version_checker
+  schedule_expression_nodegroup        = var.schedule_expression_nodegroup
+  eks_version_checker_lambda_arn       = module.lambda.eks_version_checker_arn
   nodegroup_version_checker_lambda_arn = module.lambda.nodegroup_version_checker_arn
-  scheduler_role_arn                  = module.iam.scheduler_role_arn
-  scheduler_role_id                   = module.iam.scheduler_role_id
-  nodegroup_scheduler_role_arn        = module.iam.nodegroup_scheduler_role_arn
-  nodegroup_scheduler_role_id         = module.iam.nodegroup_scheduler_role_id
+  scheduler_role_arn                   = module.iam.scheduler_role_arn
+  scheduler_role_id                    = module.iam.scheduler_role_id
+  nodegroup_scheduler_role_arn         = module.iam.nodegroup_scheduler_role_arn
+  nodegroup_scheduler_role_id          = module.iam.nodegroup_scheduler_role_id
 }

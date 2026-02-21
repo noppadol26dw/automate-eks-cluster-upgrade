@@ -1,6 +1,11 @@
 variable "notification_email" {
   type        = string
   description = "Email address to receive EKS upgrade notifications"
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", var.notification_email))
+    error_message = "The notification_email must be a valid email address."
+  }
 }
 
 variable "enable_auto_upgrade" {
@@ -25,12 +30,22 @@ variable "schedule_expression_version_checker" {
   type        = string
   default     = "cron(0 17 ? * FRI *)"
   description = "EventBridge cron/rate for EKS version checker. Default: Fridays 17:00 UTC."
+
+  validation {
+    condition     = can(regex("^cron\\(.+\\)$", var.schedule_expression_version_checker)) || can(regex("^rate\\(.+\\)$", var.schedule_expression_version_checker))
+    error_message = "The schedule_expression_version_checker must be a valid EventBridge Scheduler expression (e.g., 'cron(0 17 ? * FRI *)' or 'rate(1 day)')."
+  }
 }
 
 variable "schedule_expression_nodegroup" {
   type        = string
   default     = "cron(0 18 ? * FRI *)"
   description = "EventBridge cron/rate for node group version checker. Default: Fridays 18:00 UTC."
+
+  validation {
+    condition     = can(regex("^cron\\(.+\\)$", var.schedule_expression_nodegroup)) || can(regex("^rate\\(.+\\)$", var.schedule_expression_nodegroup))
+    error_message = "The schedule_expression_nodegroup must be a valid EventBridge Scheduler expression (e.g., 'cron(0 18 ? * FRI *)' or 'rate(1 day)')."
+  }
 }
 
 variable "target_environments" {
