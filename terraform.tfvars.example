@@ -10,3 +10,10 @@ schedule_expression_nodegroup       = "cron(0 18 ? * FRI *)"
 # Clusters to process: include if cluster NAME or tag Environment/Env contains any of these (case-insensitive, comma-separated).
 # Examples: "dev" -> name has "dev" or tag has "dev"; "dev,lms" -> name or tag has "dev" or "lms". Use "" for all clusters.
 target_environments = "dev,development"
+
+# Addon processing settings for clusters with many addons
+max_parallel_addons = 3  # Update up to 3 addons simultaneously (1-10 recommended)
+max_addons_per_run  = 30 # Process maximum 30 addons per Lambda execution (1-100 recommended)
+
+# Testing mode: Set to true to simulate updates without making actual changes
+dry_run = false

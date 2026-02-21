@@ -13,7 +13,7 @@ resource "aws_lambda_function" "eks_version_checker" {
   role             = var.lambda_eks_checker_role_arn
   handler          = "index.lambda_handler"
   runtime          = "python3.12"
-  timeout          = 120
+  timeout          = 300
   filename         = data.archive_file.eks_version_checker.output_path
   source_code_hash = data.archive_file.eks_version_checker.output_base64sha256
 
@@ -22,6 +22,9 @@ resource "aws_lambda_function" "eks_version_checker" {
       SNS_TOPIC_ARN       = var.sns_topic_arn
       ENABLE_AUTO_UPGRADE = var.enable_auto_upgrade ? "true" : "false"
       TARGET_ENVIRONMENTS = var.target_environments
+      MAX_PARALLEL_ADDONS = var.max_parallel_addons
+      MAX_ADDONS_PER_RUN  = var.max_addons_per_run
+      DRY_RUN             = var.dry_run ? "true" : "false"
     }
   }
 }

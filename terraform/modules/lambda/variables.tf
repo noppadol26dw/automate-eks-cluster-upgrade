@@ -30,3 +30,21 @@ variable "lambda_nodegroup_role_arn" {
   type        = string
   description = "IAM role ARN for node group version checker Lambda"
 }
+
+variable "max_parallel_addons" {
+  type        = number
+  default     = 3
+  description = "Maximum number of addons to update in parallel. Default: 3. Recommended: 3-5 for production."
+}
+
+variable "max_addons_per_run" {
+  type        = number
+  default     = 30
+  description = "Maximum number of addons to process per Lambda execution. Default: 30. Remaining addons will be processed in the next scheduled run."
+}
+
+variable "dry_run" {
+  type        = bool
+  default     = false
+  description = "Enable dry-run mode to simulate updates without making changes. Useful for testing without a cluster."
+}

@@ -1,5 +1,7 @@
 import boto3
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 
 
@@ -145,8 +147,12 @@ def check_addon_update_available(eks_client, cluster_name: str, addon_name: str,
 
 
 def update_addon_with_auth_preservation(eks_client, cluster_name: str, addon_name: str,
-                                         target_version: str, auth_config: Dict) -> Dict:
+                                         target_version: str, auth_config: Dict, dry_run: bool = False) -> Dict:
     """Update addon to target_version, keeping pod identity or IRSA."""
+    if dry_run:
+        print(f"[DRY RUN] Would update addon {addon_name} in cluster {cluster_name} from {target_version} to {target_version}")
+        return {'success': True, 'update_id': 'dry-run', 'error': None, 'dry_run': True}
+    
     try:
         update_params = {
             'clusterName': cluster_name,
@@ -165,10 +171,10 @@ def update_addon_with_auth_preservation(eks_client, cluster_name: str, addon_nam
                 update_params['serviceAccountRoleArn'] = role_arn
         response = eks_client.update_addon(**update_params)
         update_id = response.get('update', {}).get('id')
-        return {'success': True, 'update_id': update_id, 'error': None}
+        return {'success': True, 'update_id': update_id, 'error': None, 'dry_run': False}
     except Exception as e:
         print(f"Error updating addon {addon_name}: {str(e)}")
-        return {'success': False, 'update_id': None, 'error': str(e)}
+        return {'success': False, 'update_id': None, 'error': str(e), 'dry_run': False}
 
 
 def format_auth(auth_type):
@@ -234,17 +240,24 @@ def send_cluster_addon_summary(sns_client, sns_topic_arn: str, cluster_name: str
 
 
 def process_cluster_addons(eks_client, sns_client, cluster_name: str, cluster_k8s_version: str,
-                           sns_topic_arn: str) -> List[Dict]:
-    """Check and optionally update all addons; send one summary SNS."""
-    import time
+                           sns_topic_arn: str, dry_run: bool = False) -> List[Dict]:
+    """Check and optionally update all addons with parallel processing; send one summary SNS."""
     results = []
     try:
         addons = get_cluster_addons(eks_client, cluster_name)
     except Exception as e:
         print(f"Failed to get addons for cluster {cluster_name}: {str(e)}")
         return results
+    
     max_retries = 3
-    for addon_info in addons:
+    max_parallel = int(os.environ.get("MAX_PARALLEL_ADDONS", "3"))
+    max_addons = int(os.environ.get("MAX_ADDONS_PER_RUN", "30"))
+    
+    addons_to_process = addons[:max_addons]
+    if len(addons) > max_addons:
+        print(f"Processing first {max_addons} of {len(addons)} addons. Remaining will be processed in next run.")
+    
+    def process_single_addon(addon_info: Dict) -> Dict:
         addon_name = addon_info.get('addon_name')
         current_version = addon_info.get('addon_version')
         addon_result = {
@@ -277,7 +290,7 @@ def process_cluster_addons(eks_client, sns_client, cluster_name: str, cluster_k8
                 for retry in range(max_retries):
                     try:
                         update_result = update_addon_with_auth_preservation(
-                            eks_client, cluster_name, addon_name, latest_version, auth_config)
+                            eks_client, cluster_name, addon_name, latest_version, auth_config, dry_run)
                         break
                     except Exception as e:
                         if 'ThrottlingException' in str(e) or 'TooManyRequestsException' in str(e):
@@ -288,14 +301,38 @@ def process_cluster_addons(eks_client, sns_client, cluster_name: str, cluster_k8
                         else:
                             raise
                 if update_result and update_result.get('success'):
-                    addon_result['status'] = 'updated'
+                    addon_result['status'] = 'updated' if not dry_run else 'dry_run'
                 else:
                     addon_result['status'] = 'failed'
                     addon_result['error'] = update_result.get('error') if update_result else 'Unknown error'
         except Exception as e:
             addon_result['status'] = 'failed'
             addon_result['error'] = str(e)
-        results.append(addon_result)
+        return addon_result
+    
+    with ThreadPoolExecutor(max_workers=max_parallel) as executor:
+        future_to_addon = {
+            executor.submit(process_single_addon, addon): addon
+            for addon in addons_to_process
+        }
+        
+        for future in as_completed(future_to_addon):
+            addon = future_to_addon[future]
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                addon_name = addon.get('addon_name', 'unknown')
+                print(f"Exception processing addon {addon_name}: {str(e)}")
+                results.append({
+                    'addon_name': addon_name,
+                    'status': 'failed',
+                    'current_version': addon.get('addon_version'),
+                    'target_version': None,
+                    'auth_type': 'none',
+                    'error': str(e)
+                })
+    
     send_cluster_addon_summary(sns_client, sns_topic_arn, cluster_name, results)
     return results
 
@@ -337,6 +374,11 @@ def lambda_handler(event, context):
     sns_topic_arn = os.environ.get('SNS_TOPIC_ARN')
     if not sns_topic_arn:
         return {'statusCode': 500, 'body': {'error': 'SNS_TOPIC_ARN not set'}}
+    
+    dry_run = os.environ.get('DRY_RUN', 'false').lower() == 'true'
+    if dry_run:
+        print("DRY RUN MODE ENABLED - No actual updates will be performed")
+    
     target_envs_raw = os.environ.get('TARGET_ENVIRONMENTS', 'dev,development')
     target_envs = [s.strip() for s in target_envs_raw.split(',') if s.strip()] if target_envs_raw else []
     clusters = list_all_clusters(eks)
@@ -355,30 +397,40 @@ def lambda_handler(event, context):
             next_version = get_next_version(current_version, available_versions) if current_version else None
             if not next_version:
                 message = f"EKS cluster '{cluster_name}' is up to date\nCurrent version: {current_version}\nLatest available: {latest_available}"
-                sns.publish(TopicArn=sns_topic_arn, Subject=f"EKS Cluster is up to date - {cluster_name}", Message=message)
+                if dry_run:
+                    print(f"[DRY RUN] Would send SNS: {message}")
+                else:
+                    sns.publish(TopicArn=sns_topic_arn, Subject=f"EKS Cluster is up to date - {cluster_name}", Message=message)
                 cluster_result['status'] = 'up_to_date'
             else:
                 insights = eks.list_insights(clusterName=cluster_name, filter={'categories': ['UPGRADE_READINESS']})
                 non_passing = [i for i in insights.get('insights', []) if i.get('insightStatus', {}).get('status') != 'PASSING']
                 if non_passing:
                     message = f"EKS cluster '{cluster_name}' upgrade blocked: {len(non_passing)} failing insights\nCurrent version: {current_version}\nNext version: {next_version}"
-                    sns.publish(TopicArn=sns_topic_arn, Subject=f"EKS Cluster Upgrade Blocked due to Potential Issue - {cluster_name}", Message=message)
+                    if dry_run:
+                        print(f"[DRY RUN] Would send SNS: {message}")
+                    else:
+                        sns.publish(TopicArn=sns_topic_arn, Subject=f"EKS Cluster Upgrade Blocked due to Potential Issue - {cluster_name}", Message=message)
                     cluster_result['status'] = 'blocked'
                     cluster_result['issues'] = len(non_passing)
                 else:
-                    if os.environ.get('ENABLE_AUTO_UPGRADE') == 'true':
+                    if os.environ.get('ENABLE_AUTO_UPGRADE') == 'true' and not dry_run:
                         eks.update_cluster_version(name=cluster_name, version=next_version)
                         message = f"EKS cluster '{cluster_name}' upgrade initiated: {current_version} -> {next_version}"
                         sns.publish(TopicArn=sns_topic_arn, Subject=f"EKS Cluster Upgrade Initiated - {cluster_name}", Message=message)
                         cluster_result['status'] = 'upgrading'
                     else:
-                        message = f"EKS cluster '{cluster_name}' upgrade available: {current_version} -> {next_version}"
-                        sns.publish(TopicArn=sns_topic_arn, Subject=f"EKS Cluster Upgrade Available for {cluster_name}", Message=message)
-                        cluster_result['status'] = 'available'
-            addon_results = process_cluster_addons(eks, sns, cluster_name, current_version or '', sns_topic_arn)
+                        action = "DRY RUN: Would upgrade" if dry_run else "Upgrade available"
+                        message = f"EKS cluster '{cluster_name}' {action}: {current_version} -> {next_version}"
+                        if dry_run:
+                            print(f"[DRY RUN] Would send SNS: {message}")
+                        else:
+                            sns.publish(TopicArn=sns_topic_arn, Subject=f"EKS Cluster Upgrade Available for {cluster_name}", Message=message)
+                        cluster_result['status'] = 'available' if not dry_run else 'dry_run'
+            addon_results = process_cluster_addons(eks, sns, cluster_name, current_version or '', sns_topic_arn, dry_run)
             cluster_result['addons'] = addon_results
             results.append(cluster_result)
         except Exception as e:
             print(f"Error processing cluster {cluster_name}: {e}")
             results.append({'cluster': cluster_name, 'status': 'error', 'error': str(e), 'addons': []})
-    return {'statusCode': 200, 'body': {'processed_clusters': results}}
+    return {'statusCode': 200, 'body': {'processed_clusters': results, 'dry_run': dry_run}}

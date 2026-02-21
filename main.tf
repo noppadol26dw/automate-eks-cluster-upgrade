@@ -22,6 +22,9 @@ module "lambda" {
   sns_topic_arn               = module.sns.topic_arn
   enable_auto_upgrade         = var.enable_auto_upgrade
   target_environments         = var.target_environments
+  max_parallel_addons         = var.max_parallel_addons
+  max_addons_per_run          = var.max_addons_per_run
+  dry_run                     = var.dry_run
   lambda_eks_checker_role_arn = module.iam.lambda_eks_checker_role_arn
   lambda_nodegroup_role_arn   = module.iam.lambda_nodegroup_role_arn
 }
